@@ -9,6 +9,17 @@ namespace NoJsonSchema.SourceGenerator.Tests;
 public class SourceGeneratorTests(ITestOutputHelper output)
 {
     [Fact]
+    public void AnyOf_UsesStructWithoutUnionInterfaceWithOlderCompiler()
+    {
+        const string schema = """{"$defs":{"Choice":{"anyOf":[{"type":"string"},{"type":"integer"}]}}}""";
+        var (assembly, diagnostics, trees) = GeneratorHarness.Run(schema);
+        Assert.Empty(diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
+        Assert.NotNull(assembly);
+        Assert.True(assembly!.GetType("Generated.Choice")!.IsValueType);
+        Assert.Contains(trees, tree => tree.ToString().Contains("#if false"));
+    }
+
+    [Fact]
     public void Generator_PicksUpAdditionalJsonFile_AndProducesCompilableTypes()
     {
         const string schema = """

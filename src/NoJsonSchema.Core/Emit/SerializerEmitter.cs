@@ -74,7 +74,8 @@ public static class SerializerEmitter
         w.Indent();
         foreach (var name in entries)
         {
-            w.WriteLine($"[typeof({name})] = ((DeserializeDelegate<{name}>){name}Formatter.Deserialize, (SerializeDelegate<{name}>){name}Formatter.Serialize),");
+            var formatter = graph.Types[name] is UnionTypeDescriptor ? UnionTypeEmitter.FormatterName(name) : name + "Formatter";
+            w.WriteLine($"[typeof({name})] = ((DeserializeDelegate<{name}>){formatter}.Deserialize, (SerializeDelegate<{name}>){formatter}.Serialize),");
         }
         w.Outdent();
         w.WriteLine("};");
@@ -140,7 +141,7 @@ public static class SerializerEmitter
     {
         foreach (var kv in graph.Types)
         {
-            if (kv.Value is ObjectTypeDescriptor or EnumTypeDescriptor) yield return kv.Key;
+            if (kv.Value is ObjectTypeDescriptor or EnumTypeDescriptor or UnionTypeDescriptor) yield return kv.Key;
         }
     }
 

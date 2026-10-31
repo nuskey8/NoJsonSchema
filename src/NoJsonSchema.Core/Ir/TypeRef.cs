@@ -28,7 +28,7 @@ public abstract record TypeRef
     }
 
     /// <summary>
-    /// Construct not yet supported by IR (allOf/oneOf/anyOf composition, enum, etc).
+    /// Construct not yet supported by IR (allOf/oneOf composition, enum, etc).
     /// Emitter must surface a clear error if it tries to materialise one of these.
     /// </summary>
     public sealed record Unsupported(string Reason) : TypeRef;

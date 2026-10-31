@@ -10,7 +10,7 @@ namespace NoJsonSchema.Core.Resolver;
 /// <remarks>
 /// Currently supports: object / array / primitive / $ref / nullable (via <c>type: [..., "null"]</c>),
 /// string enum, allOf inheritance (single $ref base + inline branches) and const properties (value not validated).
-/// Pure oneOf/anyOf, non-string enum, and standalone const still produce <see cref="OpaqueTypeDescriptor"/> placeholders.
+/// Pure oneOf, non-string enum, and standalone const still produce <see cref="OpaqueTypeDescriptor"/> placeholders.
 /// </remarks>
 public sealed class TypeGraphBuilder
 {
@@ -77,6 +77,7 @@ public sealed class TypeGraphBuilder
 
         RetrofitPolymorphicBases();
         ValidateValueObjectConstraints();
+        ValidateUnionConstraints();
 
         if (includedTypeNames is { Count: > 0 })
         {
@@ -131,6 +132,12 @@ public sealed class TypeGraphBuilder
 
     static IEnumerable<string> DependenciesOf(TypeDescriptor desc)
     {
+        if (desc is UnionTypeDescriptor union)
+        {
+            foreach (var branch in union.Cases)
+                if (branch.Type is not null)
+                    foreach (var n in CollectNamedRefs(branch.Type)) yield return n;
+        }
         if (desc is not ObjectTypeDescriptor obj) yield break;
 
         if (obj.BaseTypeName is not null) yield return obj.BaseTypeName;
@@ -213,6 +220,50 @@ public sealed class TypeGraphBuilder
         }
     }
 
+    void ValidateUnionConstraints()
+    {
+        foreach (var union in descriptors.Values.OfType<UnionTypeDescriptor>())
+            Visit(union, new HashSet<string>(StringComparer.Ordinal));
+
+        void CheckPayload(TypeRef? type, string pointer)
+        {
+            switch (type)
+            {
+                case null:
+                case TypeRef.Primitive: return;
+                case TypeRef.Nullable nullable: CheckPayload(nullable.Inner, pointer); return;
+                case TypeRef.Array array: CheckElement(array.Element, pointer); return;
+                case TypeRef.Dictionary dictionary: CheckElement(dictionary.Value, pointer); return;
+                case TypeRef.Named named when descriptors.TryGetValue(named.Name, out var descriptor)
+                    && descriptor is not OpaqueTypeDescriptor
+                    && descriptor is not ObjectTypeDescriptor { Polymorphic: not null }: return;
+                default: throw new SchemaLoadException("Unsupported anyOf payload type.", pointer);
+            }
+        }
+
+        void CheckElement(TypeRef element, string pointer)
+        {
+            // shortcut: shared collection readers handle scalar/named elements only, extend them before admitting nested collections.
+            if (element is TypeRef.Nullable or TypeRef.Array or TypeRef.Dictionary)
+                throw new SchemaLoadException("Nested collections and nullable collection elements in anyOf payloads are not supported.", pointer);
+            CheckPayload(element, pointer);
+        }
+
+        void Visit(UnionTypeDescriptor union, HashSet<string> path)
+        {
+            if (!path.Add(union.Name))
+                throw new SchemaLoadException("anyOf cycle has no consuming object/array boundary.", union.SourcePointer);
+            foreach (var branch in union.Cases)
+            {
+                CheckPayload(branch.Type, union.SourcePointer);
+                var type = branch.Type is TypeRef.Nullable nullable ? nullable.Inner : branch.Type;
+                if (type is TypeRef.Named named && descriptors[named.Name] is UnionTypeDescriptor nested)
+                    Visit(nested, path);
+            }
+            path.Remove(union.Name);
+        }
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Building descriptors for names that are known up-front (i.e. $defs entries).
     // ---------------------------------------------------------------------------------------------
@@ -233,6 +284,8 @@ public sealed class TypeGraphBuilder
                 Reason = "$ref alias at $defs root (not lowered yet)",
             };
         }
+
+        if (schema.AnyOf.Count > 0) return BuildUnionDescriptor(name, schema);
 
         if (IsStringEnum(schema, out var enumValues))
         {
@@ -277,6 +330,34 @@ public sealed class TypeGraphBuilder
             Description = schema.Description,
             Deprecated = schema.Deprecated,
             Reason = "non-object named root (not supported)",
+        };
+    }
+
+    UnionTypeDescriptor BuildUnionDescriptor(string name, SchemaNode schema)
+    {
+        // Sibling composition needs intersection semantics, not just a choice of types.
+        if (schema.AllOf.Count > 0 || schema.OneOf.Count > 0 || schema.Not is not null
+            || schema.Properties.Count > 0 || schema.Types.Count > 0 || schema.Required.Count > 0
+            || schema.AdditionalProperties is not null || schema.Items is not null
+            || schema.Enum is not null || schema.Const is not null)
+            throw new SchemaLoadException("anyOf with sibling type/composition constraints is not supported.", schema.Pointer);
+
+        var cases = new List<UnionCase>();
+        foreach (var branch in schema.AnyOf)
+        {
+            var caseName = names.MakeUniqueTypeName(name + "Case" + (cases.Count + 1));
+            var isNull = branch.Ref is null && branch.AllOf.Count == 0 && branch.OneOf.Count == 0
+                && branch.AnyOf.Count == 0 && branch.Not is null
+                && branch.Types.Count == 1 && branch.Types[0] == JsonSchemaType.Null;
+            var type = isNull ? null : BuildTypeRef(branch, caseName + "Value");
+            if (type is TypeRef.Any or TypeRef.Unsupported)
+                throw new SchemaLoadException("anyOf requires typed branches supported by the generator.", branch.Pointer);
+            cases.Add(new UnionCase(caseName, type));
+        }
+        return new UnionTypeDescriptor
+        {
+            Name = name, SourcePointer = schema.Pointer,
+            Description = schema.Description, Deprecated = schema.Deprecated, Cases = cases,
         };
     }
 
@@ -634,6 +715,14 @@ public sealed class TypeGraphBuilder
             return new TypeRef.Named(name);
         }
 
+        if (schema.AnyOf.Count > 0)
+        {
+            var unionName = names.MakeUniqueTypeName(contextHint);
+            refs.Register(schema.Pointer, unionName);
+            descriptors[unionName] = BuildUnionDescriptor(unionName, schema);
+            return new TypeRef.Named(unionName);
+        }
+
         if (IsStringEnum(schema, out var enumValues))
         {
             var enumName = names.MakeUniqueTypeName(contextHint);
@@ -713,14 +802,14 @@ public sealed class TypeGraphBuilder
     // Static helpers.
     // ---------------------------------------------------------------------------------------------
 
-    static JsonSchemaType ResolveDominantType(SchemaNode schema, IReadOnlyList<JsonSchemaType> types)
+    static JsonSchemaType? ResolveDominantType(SchemaNode schema, IReadOnlyList<JsonSchemaType> types)
     {
         if (types.Count == 1) return types[0];
         if (types.Count > 1) return JsonSchemaType.Object; // multi-type unions land as objects/any below
 
         if (schema.Properties.Count > 0 || schema.AdditionalProperties is not null) return JsonSchemaType.Object;
         if (schema.Items is not null) return JsonSchemaType.Array;
-        return default; // sentinel → Any
+        return null; // no type → Any
     }
 
     static TypeRef MapStringPrimitive(SchemaNode schema) => schema.Format switch

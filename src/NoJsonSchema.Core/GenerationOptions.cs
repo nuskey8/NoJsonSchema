@@ -34,6 +34,7 @@ public sealed class GenerationOptions
     public TypeStyle TypeStyle { get; init; } = TypeStyle.Class;
     public AllOfStrategy AllOfStrategy { get; init; } = AllOfStrategy.Inherit;
     public bool StrictExtraProperties { get; init; }
+    public bool? UseUnion { get; init; }
     public bool EmitAsync { get; init; } = true;
 
     /// <summary>Override the namespace-wide serializer class name. Defaults to {NsLeaf}Serializer.</summary>

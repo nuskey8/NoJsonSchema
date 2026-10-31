@@ -8,10 +8,14 @@ namespace NoJsonSchema.Core.Emit;
 /// Emits <c>{Type}Formatter.g.cs</c> for a single <see cref="ObjectTypeDescriptor"/> —
 /// the type-specific Deserialize / Serialize implementation.
 /// </summary>
-public static class FormatterEmitter
+public static partial class FormatterEmitter
 {
     readonly record struct EmitContext(TypeGraph Graph)
     {
+        public bool IsUnion(string name) => Graph.Types.TryGetValue(name, out var d) && d is UnionTypeDescriptor;
+
+        public string FormatterName(string name) => IsUnion(name) ? UnionTypeEmitter.FormatterName(name) : name + "Formatter";
+
         public bool IsEnum(string name) => Graph.Types.TryGetValue(name, out var d) && d is EnumTypeDescriptor;
 
         public bool IsStruct(string name) =>
@@ -27,7 +31,7 @@ public static class FormatterEmitter
         public bool IsValueTypeReference(TypeRef type) => type switch
         {
             TypeRef.Nullable nu => IsValueTypeReference(nu.Inner),
-            TypeRef.Named n => IsEnum(n.Name) || IsStruct(n.Name),
+            TypeRef.Named n => IsEnum(n.Name) || IsStruct(n.Name) || IsUnion(n.Name),
             _ => TypeExpression.IsValueType(type),
         };
     }
@@ -309,19 +313,22 @@ public static class FormatterEmitter
                 w.WriteLine($"value.{p.Name} = {ReadPrimitiveExpr(prim)};");
                 break;
 
+            case TypeRef.Named named when ctx.IsUnion(named.Name):
+                w.WriteLine($"value.{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
+                break;
             case TypeRef.Named named when ctx.IsEnum(named.Name):
-                w.WriteLine($"value.{p.Name} = {named.Name}Formatter.ReadValue(ref tokenizer);");
+                w.WriteLine($"value.{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer);");
                 break;
 
             case TypeRef.Named named when ctx.IsStruct(named.Name):
                 w.WriteLine("tokenizer.ReadStartObject();");
-                w.WriteLine($"value.{p.Name} = {named.Name}Formatter.ReadValue(ref tokenizer, options);");
+                w.WriteLine($"value.{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
                 break;
 
             case TypeRef.Named named:
                 w.WriteLine("tokenizer.ReadStartObject();");
                 w.WriteLine($"var sub_{p.Name} = new {named.Name}();");
-                w.WriteLine($"{named.Name}Formatter.ReadInto(ref tokenizer, sub_{p.Name}, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.ReadInto(ref tokenizer, sub_{p.Name}, options);");
                 w.WriteLine($"value.{p.Name} = sub_{p.Name};");
                 break;
 
@@ -376,17 +383,20 @@ public static class FormatterEmitter
             case TypeRef.Primitive prim:
                 w.WriteLine($"{buf}[{cnt}++] = {ReadPrimitiveExpr(prim)};");
                 break;
+            case TypeRef.Named named when ctx.IsUnion(named.Name):
+                w.WriteLine($"{buf}[{cnt}++] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
+                break;
             case TypeRef.Named named when ctx.IsEnum(named.Name):
-                w.WriteLine($"{buf}[{cnt}++] = {named.Name}Formatter.ReadValue(ref tokenizer);");
+                w.WriteLine($"{buf}[{cnt}++] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer);");
                 break;
             case TypeRef.Named named when ctx.IsStruct(named.Name):
                 w.WriteLine("tokenizer.ReadStartObject();");
-                w.WriteLine($"{buf}[{cnt}++] = {named.Name}Formatter.ReadValue(ref tokenizer, options);");
+                w.WriteLine($"{buf}[{cnt}++] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
                 break;
             case TypeRef.Named named:
                 w.WriteLine("tokenizer.ReadStartObject();");
                 w.WriteLine($"var elem = new {named.Name}();");
-                w.WriteLine($"{named.Name}Formatter.ReadInto(ref tokenizer, elem, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.ReadInto(ref tokenizer, elem, options);");
                 w.WriteLine($"{buf}[{cnt}++] = elem;");
                 break;
             default:
@@ -395,7 +405,7 @@ public static class FormatterEmitter
         }
     }
 
-    static void EmitReadDictionaryInto(SourceWriter w, PropertyDescriptor p, TypeRef.Dictionary dict, EmitContext ctx)
+    static void EmitReadDictionaryInto(SourceWriter w, PropertyDescriptor p, TypeRef.Dictionary dict, EmitContext ctx, string? assignTarget = null)
     {
         var valueType = TypeExpression.Render(dict.Value);
         w.WriteLine("tokenizer.ReadStartObject();");
@@ -408,17 +418,20 @@ public static class FormatterEmitter
                 case TypeRef.Primitive prim:
                     w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {ReadPrimitiveExpr(prim)};");
                     break;
+                case TypeRef.Named named when ctx.IsUnion(named.Name):
+                    w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
+                    break;
                 case TypeRef.Named named when ctx.IsEnum(named.Name):
-                    w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {named.Name}Formatter.ReadValue(ref tokenizer);");
+                    w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer);");
                     break;
                 case TypeRef.Named named when ctx.IsStruct(named.Name):
                     w.WriteLine("tokenizer.ReadStartObject();");
-                    w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {named.Name}Formatter.ReadValue(ref tokenizer, options);");
+                    w.WriteLine($"dict_{p.Name}[key_{p.Name}] = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
                     break;
                 case TypeRef.Named named:
                     w.WriteLine("tokenizer.ReadStartObject();");
                     w.WriteLine($"var dv = new {named.Name}();");
-                    w.WriteLine($"{named.Name}Formatter.ReadInto(ref tokenizer, dv, options);");
+                    w.WriteLine($"{ctx.FormatterName(named.Name)}.ReadInto(ref tokenizer, dv, options);");
                     w.WriteLine($"dict_{p.Name}[key_{p.Name}] = dv;");
                     break;
                 default:
@@ -426,7 +439,7 @@ public static class FormatterEmitter
                     break;
             }
         }
-        w.WriteLine($"value.{p.Name} = dict_{p.Name};");
+        w.WriteLine($"{assignTarget ?? $"value.{p.Name}"} = dict_{p.Name};");
     }
 
     static string ReadPrimitiveExpr(TypeRef.Primitive prim) => prim.Kind switch
@@ -526,18 +539,18 @@ public static class FormatterEmitter
                 w.WriteLine(WritePrimitiveExpr(prim, read) + ";");
                 break;
             case TypeRef.Named named when ctx.IsEnum(named.Name):
-                w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, {read});");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, {read});");
                 break;
             case TypeRef.Named named when ctx.IsStruct(named.Name):
                 {
                     // Property getters return by value, so spill into a local before passing 'in'.
                     var local = "__vo_" + p.Name;
                     w.WriteLine($"var {local} = {read};");
-                    w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, in {local}, options);");
+                    w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, in {local}, options);");
                     break;
                 }
             case TypeRef.Named named:
-                w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, {read}!, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, {read}!, options);");
                 break;
             case TypeRef.Array arr:
                 w.WriteLine("w.WriteStartArray();");
@@ -609,13 +622,13 @@ public static class FormatterEmitter
                 w.WriteLine(WritePrimitiveExpr(prim, read) + ";");
                 break;
             case TypeRef.Named named when ctx.IsEnum(named.Name):
-                w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, {read});");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, {read});");
                 break;
             case TypeRef.Named named when ctx.IsStruct(named.Name):
-                w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, in {read}, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, in {read}, options);");
                 break;
             case TypeRef.Named named:
-                w.WriteLine($"{named.Name}Formatter.WriteValue(ref w, {read}, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.WriteValue(ref w, {read}, options);");
                 break;
             default:
                 w.WriteLine("w.WriteNull();");
@@ -772,21 +785,27 @@ public static class FormatterEmitter
             case TypeRef.Primitive prim:
                 w.WriteLine($"__v_{p.Name} = {ReadPrimitiveExpr(prim)};");
                 break;
+            case TypeRef.Named named when ctx.IsUnion(named.Name):
+                w.WriteLine($"__v_{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
+                break;
             case TypeRef.Named named when ctx.IsEnum(named.Name):
-                w.WriteLine($"__v_{p.Name} = {named.Name}Formatter.ReadValue(ref tokenizer);");
+                w.WriteLine($"__v_{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer);");
                 break;
             case TypeRef.Named named when ctx.IsStruct(named.Name):
                 w.WriteLine("tokenizer.ReadStartObject();");
-                w.WriteLine($"__v_{p.Name} = {named.Name}Formatter.ReadValue(ref tokenizer, options);");
+                w.WriteLine($"__v_{p.Name} = {ctx.FormatterName(named.Name)}.ReadValue(ref tokenizer, options);");
                 break;
             case TypeRef.Named named:
                 w.WriteLine("tokenizer.ReadStartObject();");
                 w.WriteLine($"var sub_{p.Name} = new {named.Name}();");
-                w.WriteLine($"{named.Name}Formatter.ReadInto(ref tokenizer, sub_{p.Name}, options);");
+                w.WriteLine($"{ctx.FormatterName(named.Name)}.ReadInto(ref tokenizer, sub_{p.Name}, options);");
                 w.WriteLine($"__v_{p.Name} = sub_{p.Name};");
                 break;
             case TypeRef.Array arr:
                 EmitReadArrayBuffer(w, p.Name, arr, $"__v_{p.Name}", ctx);
+                break;
+            case TypeRef.Dictionary dict:
+                EmitReadDictionaryInto(w, p, dict, ctx, $"__v_{p.Name}");
                 break;
             case TypeRef.Any:
                 w.WriteLine("tokenizer.SkipValue();");

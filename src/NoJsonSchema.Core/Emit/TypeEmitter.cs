@@ -195,7 +195,7 @@ public static class TypeEmitter
             Ir.TypeRef.Nullable nu => IsValueTypeReference(nu.Inner, graph),
             Ir.TypeRef.Named n =>
                 graph.Types.TryGetValue(n.Name, out var desc)
-                && (desc is Ir.EnumTypeDescriptor
+                && (desc is Ir.EnumTypeDescriptor or Ir.UnionTypeDescriptor
                     || (desc is Ir.ObjectTypeDescriptor obj && obj.Style == TypeStyle.ReadonlyRecordStruct)),
             _ => false,
         };

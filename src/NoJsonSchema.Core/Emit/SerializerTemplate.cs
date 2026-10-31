@@ -237,7 +237,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out sbyte v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out sbyte v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid int8");
         return v;
     }
@@ -246,7 +246,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out byte v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out byte v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid uint8");
         return v;
     }
@@ -255,7 +255,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out short v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out short v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid int16");
         return v;
     }
@@ -264,7 +264,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out ushort v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out ushort v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid uint16");
         return v;
     }
@@ -273,7 +273,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out int v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out int v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid int32");
         return v;
     }
@@ -282,7 +282,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out uint v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out uint v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid uint32");
         return v;
     }
@@ -291,7 +291,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out long v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out long v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid int64");
         return v;
     }
@@ -300,7 +300,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out ulong v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out ulong v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid uint64");
         return v;
     }
@@ -309,7 +309,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out float v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out float v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid float");
         return v;
     }
@@ -318,7 +318,7 @@ ref struct Utf8JsonTokenizer
     {
         ReadNumberValue();
         if (!global::System.Buffers.Text.Utf8Parser.TryParse(
-                SliceFrom(valueStart, valueEnd - valueStart), out double v, out _))
+                SliceFrom(valueStart, valueEnd - valueStart), out double v, out var consumed) || consumed != valueEnd - valueStart)
             ThrowFormatException("Invalid double");
         return v;
     }
@@ -533,7 +533,7 @@ ref struct Utf8JsonTokenizer
 #endif
 
     [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    void SkipWhitespace()
+    public void SkipWhitespace()
     {
         // Scalar fast-exit: pos usually already sits on non-whitespace (compact input, or an
         // upstream peek already skipped), so avoid the IndexOfAnyExcept call in the common case.

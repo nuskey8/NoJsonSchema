@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 using NoJsonSchema.Core;
 using NoJsonSchema.Core.Schema;
@@ -83,16 +84,23 @@ public sealed class NoJsonSchemaGenerator : IIncrementalGenerator
                                             ?? GetGlobal(globals, IncludeTypesMetadata)));
             });
 
-        context.RegisterSourceOutput(perFile, Emit);
+        // CSharp15 is 1500; use its value to keep the Unity-compatible Roslyn 4.3 reference.
+        var useUnion = context.CompilationProvider.Combine(context.ParseOptionsProvider)
+            .Select(static (pair, _) => pair.Right is CSharpParseOptions parse
+                && (int)parse.LanguageVersion >= 1500
+                && pair.Left.GetTypeByMetadataName("System.Runtime.CompilerServices.IUnion") is not null);
+        context.RegisterSourceOutput(perFile.Combine(useUnion),
+            static (spc, pair) => Emit(spc, pair.Left, pair.Right));
     }
 
-    static void Emit(SourceProductionContext spc, SchemaInput input)
+    static void Emit(SourceProductionContext spc, SchemaInput input, bool useUnion)
     {
         try
         {
             var options = new GenerationOptions
             {
                 Namespace = input.Namespace,
+                UseUnion = useUnion,
                 StrictExtraProperties = input.StrictExtra,
                 TypeStyle = ParseStyle(input.TypeStyle),
                 ValueObjectTypes = new System.Collections.Generic.HashSet<string>(input.ValueObjects, StringComparer.Ordinal),

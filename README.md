@@ -298,7 +298,8 @@ NoJsonSchema intentionally supports the schema features most common in SDK-style
 | `format`: `date-time` / `date` / `time` / `duration` / `uuid` / `uri` / `uri-reference` / `byte` / `binary` | ✅ |
 | Integer subtypes: `int8` / `uint8` / `byte` / `int16` / `uint16` / `int32` / `uint32` / `int64` / `uint64` | ✅ |
 | `pattern`, `minLength` / `maxLength`, numeric ranges | ⏳ runtime validation TBD |
-| `if` / `then` / `else`, `not`, `anyOf` | ⏳ |
+| `anyOf` | ✅ |
+| `if` / `then` / `else`, `not` | ⏳ |
 | External `$ref` (cross-document) | ⏳ |
 
 `format` strings the IR doesn't recognise fall back to the base type (e.g. unknown `string` format → `string`).
