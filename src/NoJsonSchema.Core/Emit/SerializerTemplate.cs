@@ -108,6 +108,12 @@ ref struct Utf8JsonTokenizer
         get => pos;
     }
 
+    public byte PeekToken()
+    {
+        SkipWhitespace();
+        return pos < length ? ByteAt(pos) : (byte)0;
+    }
+
     public void ReadStartObject()
     {
         SkipWhitespace();

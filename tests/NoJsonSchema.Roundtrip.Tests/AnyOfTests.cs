@@ -179,14 +179,15 @@ public class AnyOfTests
     }
 
     [Fact]
-    public void Objects_CheckRequiredProperties_AndRestoreTokenizerAfterFailure()
+    public void Objects_RestoreTokenizerAfterTypeMismatch()
     {
         var assembly = Compile();
-        var value = Read(assembly, "Pet", "{\"bark\":true}");
+        var value = Read(assembly, "Pet", "{\"meow\":\"invalid\",\"bark\":true}");
         Assert.Equal("AnyOf.Dog", value.GetType().GetProperty("Value")!.GetValue(value)!.GetType().FullName);
         Assert.Equal("{\"bark\":true}", Write(assembly, "Pet", value));
-        var error = Assert.Throws<TargetInvocationException>(() => Read(assembly, "Pet", "{}"));
-        Assert.Equal("NoJsonFormatException", error.InnerException!.GetType().Name);
+        var empty = Read(assembly, "Pet", "{}");
+        Assert.Equal("AnyOf.Cat", empty.GetType().GetProperty("Value")!.GetValue(empty)!.GetType().FullName);
+        Assert.Equal("{\"meow\":false}", Write(assembly, "Pet", empty));
     }
 
     [Fact]
@@ -258,6 +259,146 @@ public class AnyOfTests
         var assembly = Compile(schema);
         const string json = "{\"child\":{\"child\":42}}";
         Assert.Equal(json, Write(assembly, "Choice", Read(assembly, "Choice", json)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NestedMissingRequired_UsesExistingReaderDefaults(bool valueObjects)
+    {
+        const string schema = """
+            {"$defs":{
+              "AX":{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+              "BY":{"type":"object","properties":{"y":{"type":"integer"}},"required":["y"]},
+              "A":{"type":"object","properties":{"a":{"$ref":"#/$defs/AX"}},"required":["a"]},
+              "B":{"type":"object","properties":{"a":{"$ref":"#/$defs/BY"}},"required":["a"]},
+              "Choice":{"anyOf":[{"$ref":"#/$defs/A"},{"$ref":"#/$defs/B"}]}
+            }}
+            """;
+        var assembly = Compile(schema, new GenerationOptions
+        {
+            Namespace = "AnyOf", UseUnion = false,
+            ValueObjectTypes = valueObjects ? ["AX", "BY", "A", "B"] : [],
+        });
+        var value = Read(assembly, "Choice", "{\"a\":{}}");
+        Assert.Equal("{\"a\":{\"x\":0}}", Write(assembly, "Choice", value));
+    }
+
+    [Theory]
+    [InlineData("array", "[{}]", "[{\"x\":0}]")]
+    [InlineData("dictionary", "{\"key\":{}}", "{\"key\":{\"x\":0}}")]
+    public void CollectionElements_UseExistingReaderDefaults(string kind, string json, string expected)
+    {
+        var a = kind == "array" ? "\"type\":\"array\",\"items\"" : "\"type\":\"object\",\"additionalProperties\"";
+        var schema = """
+            {"$defs":{
+              "AX":{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+              "BY":{"type":"object","properties":{"y":{"type":"integer"}},"required":["y"]},
+              "Choice":{"anyOf":[{PAYLOAD:{"$ref":"#/$defs/AX"}},{PAYLOAD:{"$ref":"#/$defs/BY"}}]}
+            }}
+            """.Replace("PAYLOAD", a);
+        var assembly = Compile(schema);
+        Assert.Equal(expected, Write(assembly, "Choice", Read(assembly, "Choice", json)));
+    }
+
+    [Theory]
+    [InlineData("Value")]
+    [InlineData("HasValue")]
+    [InlineData("TryGetValue")]
+    [InlineData("FromCase1")]
+    public void UnionNames_DoNotCollideWithMembers(string name)
+    {
+        var schema = """
+            {"$defs":{
+              "NAME":{"anyOf":[{"type":"integer"},{"type":"string"}]},
+              "Envelope":{"type":"object","properties":{"item":{"$ref":"#/$defs/NAME"}},"required":["item"]}
+            }}
+            """.Replace("NAME", name);
+        var assembly = Compile(schema, new GenerationOptions { Namespace = "AnyOf", UseUnion = false, IncludedTypes = ["Envelope"] });
+        Assert.Equal("{\"item\":42}", Write(assembly, "Envelope", Read(assembly, "Envelope", "{\"item\":42}")));
+        var included = new GeneratorPipeline().Generate(schema, new GenerationOptions { IncludedTypes = [name] });
+        Assert.Contains(included.Files, f => f.FileName == name + "Union.g.cs");
+    }
+
+    [Fact]
+    public void TokenDispatch_SkipsUnrelatedBranchesWithoutExceptionAllocations()
+    {
+        long Measure(string branches)
+        {
+            var schema = "{\"$defs\":{\"Choice\":{\"anyOf\":[" + branches + "]}}}";
+            var assembly = Compile(schema);
+            var method = assembly.GetType("AnyOf.AnyOfSerializer")!.GetMethods()
+                .Single(m => m.Name == "Deserialize" && m.GetParameters()[0].ParameterType == typeof(byte[]))
+                .MakeGenericMethod(assembly.GetType("AnyOf.Choice")!);
+            object?[] arguments = [Encoding.UTF8.GetBytes("42"), null];
+            for (var i = 0; i < 256; i++) method.Invoke(null, arguments);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++) method.Invoke(null, arguments);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        var numericFirst = Measure("{\"type\":\"integer\"},{\"type\":\"string\"}");
+        var stringFirst = Measure("{\"type\":\"string\"},{\"type\":\"integer\"}");
+        Assert.True(stringFirst <= numericFirst + 1024, $"First: {numericFirst}; fallback: {stringFirst}");
+    }
+
+    [Fact]
+    public void Readers_DoNotExposeRequiredValidationOptions()
+    {
+        var assembly = Compile();
+        var tokenizer = assembly.GetType("AnyOf.Utf8JsonTokenizer")!;
+        Assert.Null(tokenizer.GetProperty("ValidateRequiredProperties", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance));
+        var reader = assembly.GetType("AnyOf.CatFormatter")!.GetMethod("ReadInto", BindingFlags.NonPublic | BindingFlags.Static)!;
+        Assert.DoesNotContain(reader.GetParameters(), parameter => parameter.ParameterType == typeof(bool));
+    }
+
+    [Fact]
+    public void UnionAndPlainObjects_UseTheSamePermissiveReader()
+    {
+        const string schema = """
+            {"$defs":{
+              "AX":{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+              "Choice":{"anyOf":[{"$ref":"#/$defs/AX"},{"type":"string"}]},
+              "Envelope":{"type":"object","properties":{"choice":{"$ref":"#/$defs/Choice"},"plain":{"$ref":"#/$defs/AX"}}}
+            }}
+            """;
+        var assembly = Compile(schema);
+        var value = Read(assembly, "Envelope", "{\"choice\":{},\"plain\":{}}");
+        Assert.Equal("{\"choice\":{\"x\":0},\"plain\":{\"x\":0}}", Write(assembly, "Envelope", value));
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("true")]
+    [InlineData("\"text\"")]
+    [InlineData("null")]
+    public void NestedUnions_DispatchAllReachableTokenKinds(string json)
+    {
+        const string schema = """
+            {"$defs":{
+              "A":{"anyOf":[{"type":"string"},{"type":"integer"}]},
+              "B":{"anyOf":[{"$ref":"#/$defs/A"},{"type":"boolean"}]},
+              "Choice":{"anyOf":[{"$ref":"#/$defs/B"},{"type":"null"}]}
+            }}
+            """;
+        var assembly = Compile(schema);
+        Assert.Equal(json, Write(assembly, "Choice", Read(assembly, "Choice", json)));
+    }
+
+    [Fact]
+    public void RenamedUnion_KeepsReferencesAndOriginalIncludeNameWhenSuffixIsTaken()
+    {
+        const string schema = """
+            {"$defs":{
+              "ValueUnion":{"type":"object","properties":{"other":{"type":"string"}}},
+              "Value":{"anyOf":[{"type":"integer"},{"type":"string"}]},
+              "Envelope":{"type":"object","properties":{"value":{"$ref":"#/$defs/Value"}},"required":["value"]}
+            }}
+            """;
+        var assembly = Compile(schema);
+        Assert.Equal("{\"value\":42}", Write(assembly, "Envelope", Read(assembly, "Envelope", "{\"value\":42}")));
+        var result = new GeneratorPipeline().Generate(schema, new GenerationOptions { IncludedTypes = ["Value"] });
+        Assert.Contains(result.Files, f => f.FileName == "ValueUnion2.g.cs");
+        Assert.DoesNotContain(result.Files, f => f.FileName == "ValueUnion.g.cs");
     }
 
     [Fact]

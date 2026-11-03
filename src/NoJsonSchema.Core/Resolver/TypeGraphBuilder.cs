@@ -16,6 +16,7 @@ public sealed class TypeGraphBuilder
 {
     readonly NameFactory names = new();
     readonly RefResolver refs = new();
+    readonly Dictionary<string, string> definitionTypeNames = new(StringComparer.Ordinal);
     readonly Dictionary<string, TypeDescriptor> descriptors = new(StringComparer.Ordinal);
     /// <summary>
     /// $defs entries that are nothing more than a re-named primitive (e.g. <c>{ "type": "string" }</c>
@@ -60,7 +61,9 @@ public sealed class TypeGraphBuilder
                 primitiveAliases[schema.Pointer] = aliasRef;
                 continue;
             }
-            var typeName = names.MakeUniqueTypeName(key);
+            var typeName = MakeTypeName(key, schema);
+            var originalName = NameFactory.ToTypeIdentifier(key);
+            if (!definitionTypeNames.ContainsKey(originalName)) definitionTypeNames.Add(originalName, typeName);
             refs.Register(schema.Pointer, typeName);
             namedSchemas.Add((typeName, schema));
         }
@@ -104,6 +107,7 @@ public sealed class TypeGraphBuilder
         foreach (var raw in seeds)
         {
             var normalised = NameFactory.ToTypeIdentifier(raw);
+            if (definitionTypeNames.TryGetValue(normalised, out var actualName)) normalised = actualName;
             if (!descriptors.ContainsKey(normalised))
             {
                 throw new SchemaLoadException(
@@ -331,6 +335,16 @@ public sealed class TypeGraphBuilder
             Deprecated = schema.Deprecated,
             Reason = "non-object named root (not supported)",
         };
+    }
+
+    string MakeTypeName(string hint, SchemaNode schema)
+    {
+        var identifier = NameFactory.ToTypeIdentifier(hint);
+        if (schema.AnyOf.Count > 0 && (identifier is "Value" or "HasValue" or "TryGetValue"
+            || (identifier.StartsWith("FromCase", StringComparison.Ordinal)
+                && int.TryParse(identifier.AsSpan()[8..], out var index) && index > 0 && index <= schema.AnyOf.Count)))
+            hint = identifier + "Union";
+        return names.MakeUniqueTypeName(hint);
     }
 
     UnionTypeDescriptor BuildUnionDescriptor(string name, SchemaNode schema)
@@ -717,7 +731,7 @@ public sealed class TypeGraphBuilder
 
         if (schema.AnyOf.Count > 0)
         {
-            var unionName = names.MakeUniqueTypeName(contextHint);
+            var unionName = MakeTypeName(contextHint, schema);
             refs.Register(schema.Pointer, unionName);
             descriptors[unionName] = BuildUnionDescriptor(unionName, schema);
             return new TypeRef.Named(unionName);

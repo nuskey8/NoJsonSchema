@@ -24,16 +24,17 @@ public static partial class FormatterEmitter
             }
             using (w.Block($"internal static {type.Name} ReadValue(ref Utf8JsonTokenizer tokenizer, NoJsonSerializerOptions options)"))
             {
+                w.WriteLine("var token = tokenizer.PeekToken();");
                 w.WriteLine("var original = tokenizer;");
                 foreach (var branch in type.Cases)
                 {
-                    using (w.Block("try"))
+                    using (w.Block($"if ({UnionTokenCondition(branch.Type, graph)})"))
                     {
-                        w.WriteLine($"var result = Read{branch.Name}(ref tokenizer, options);");
-                        w.WriteLine("return result;");
+                        using (w.Block("try"))
+                            w.WriteLine($"return Read{branch.Name}(ref tokenizer, options);");
+                        using (w.Block("catch (NoJsonFormatException)"))
+                            w.WriteLine("tokenizer = original;");
                     }
-                    using (w.Block("catch (NoJsonFormatException)"))
-                        w.WriteLine("tokenizer = original;");
                 }
                 w.WriteLine($"tokenizer.ThrowFormatException(\"No anyOf branch matched {type.Name}\");");
                 w.WriteLine("return default!;");
@@ -49,7 +50,6 @@ public static partial class FormatterEmitter
                         w.WriteLine($"return {type.Name}.FromCase{i + 1}();");
                         continue;
                     }
-                    EmitUnionRequiredCheck(w, branch.Type, graph);
                     w.WriteLine($"var value = default(Holder{branch.Name});");
                     EmitReadValueInto(w, UnionProperty(branch.Type), ctx);
                     w.WriteLine($"return {type.Name}.FromCase{i + 1}(value.Value);");
@@ -108,23 +108,48 @@ public static partial class FormatterEmitter
         IsNullable = type is TypeRef.Nullable,
     };
 
-    static void EmitUnionRequiredCheck(SourceWriter w, TypeRef type, TypeGraph graph)
+    static string UnionTokenCondition(TypeRef? type, TypeGraph graph)
     {
-        if (Unwrap(type) is not TypeRef.Named named
-            || !graph.Types.TryGetValue(named.Name, out var descriptor)
-            || descriptor is not ObjectTypeDescriptor obj) return;
-        var required = FlattenProperties(obj, graph).Where(p => p.IsRequired).ToList();
-        if (required.Count == 0) return;
-        w.WriteLine("var probe = tokenizer;");
-        using var nullableScope = type is TypeRef.Nullable ? w.Block("if (!probe.TryReadNull())") : null;
-        w.WriteLine("probe.ReadStartObject();");
-        for (var i = 0; i < required.Count; i++) w.WriteLine($"bool found{i} = false;");
-        using (w.Block("while (probe.TryReadPropertyName(out var name))"))
+        var conditions = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        Visit(type);
+        return string.Join(" || ", conditions.Select(condition => "(" + condition + ")"));
+
+        void Visit(TypeRef? current)
         {
-            for (var i = 0; i < required.Count; i++)
-                w.WriteLine($"if (name.SequenceEqual({EncodeUtf8Literal(EscapeJsonString(required[i].JsonName))})) found{i} = true;");
-            w.WriteLine("probe.SkipValue();");
+            switch (current)
+            {
+                case null: conditions.Add("token == (byte)'n'"); break;
+                case TypeRef.Nullable nullable:
+                    conditions.Add("token == (byte)'n'");
+                    Visit(nullable.Inner);
+                    break;
+                case TypeRef.Array: conditions.Add("token == (byte)'['"); break;
+                case TypeRef.Dictionary: conditions.Add("token == (byte)'{'"); break;
+                case TypeRef.Named named when visited.Add(named.Name):
+                    switch (graph.Types[named.Name])
+                    {
+                        case ObjectTypeDescriptor: conditions.Add("token == (byte)'{'"); break;
+                        case EnumTypeDescriptor: conditions.Add("token == (byte)'\"'"); break;
+                        case UnionTypeDescriptor union:
+                            foreach (var branch in union.Cases) Visit(branch.Type);
+                            break;
+                        default: conditions.Add("true"); break;
+                    }
+                    break;
+                case TypeRef.Named: break;
+                case TypeRef.Primitive primitive:
+                    conditions.Add(primitive.Kind switch
+                    {
+                        PrimitiveKind.Boolean => "token == (byte)'t' || token == (byte)'f'",
+                        PrimitiveKind.SByte or PrimitiveKind.Byte or PrimitiveKind.Int16 or PrimitiveKind.UInt16
+                            or PrimitiveKind.Int32 or PrimitiveKind.UInt32 or PrimitiveKind.Int64 or PrimitiveKind.UInt64
+                            or PrimitiveKind.Single or PrimitiveKind.Double => "token == (byte)'-' || (token >= (byte)'0' && token <= (byte)'9')",
+                        _ => "token == (byte)'\"'",
+                    });
+                    break;
+                default: conditions.Add("true"); break;
+            }
         }
-        w.WriteLine($"if ({string.Join(" || ", required.Select((_, i) => "!found" + i))}) tokenizer.ThrowFormatException(\"Missing required anyOf property\");");
     }
 }
