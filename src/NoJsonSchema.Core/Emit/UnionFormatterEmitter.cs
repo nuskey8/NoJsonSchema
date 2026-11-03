@@ -2,12 +2,12 @@ using NoJsonSchema.Core.Ir;
 
 namespace NoJsonSchema.Core.Emit;
 
-public static partial class FormatterEmitter
+public static class UnionFormatterEmitter
 {
-    internal static string EmitUnion(UnionTypeDescriptor type, TypeGraph graph, GenerationOptions options)
+    public static string Emit(UnionTypeDescriptor type, TypeGraph graph, GenerationOptions options)
     {
         var w = new SourceWriter();
-        var ctx = new EmitContext(graph);
+        var ctx = new FormatterEmitter.EmitContext(graph);
         TypeEmitter.WriteFileHeader(w);
         w.WriteLine("using System;");
         w.WriteLine($"namespace {options.Namespace};");
@@ -51,7 +51,7 @@ public static partial class FormatterEmitter
                         continue;
                     }
                     w.WriteLine($"var value = default(Holder{branch.Name});");
-                    EmitReadValueInto(w, UnionProperty(branch.Type), ctx);
+                    FormatterEmitter.EmitReadValueInto(w, UnionProperty(branch.Type), ctx);
                     w.WriteLine($"return {type.Name}.FromCase{i + 1}(value.Value);");
                 }
                 if (branch.Type is not null)
@@ -89,9 +89,9 @@ public static partial class FormatterEmitter
                                 using (w.Block("if (branchValue is null)")) w.WriteLine("w.WriteNull();");
                                 w.WriteLine("else");
                                 using (w.BraceBlock())
-                                    EmitWriteCoreValue(w, UnionProperty(branch.Type), Unwrap(branch.Type), "branchValue", ctx.IsValueTypeReference(branch.Type), ctx);
+                                    FormatterEmitter.EmitWriteCoreValue(w, UnionProperty(branch.Type), FormatterEmitter.Unwrap(branch.Type), "branchValue", ctx.IsValueTypeReference(branch.Type), ctx);
                             }
-                            else EmitWriteCoreValue(w, UnionProperty(branch.Type), branch.Type, "branchValue", false, ctx);
+                            else FormatterEmitter.EmitWriteCoreValue(w, UnionProperty(branch.Type), branch.Type, "branchValue", false, ctx);
                             w.WriteLine("return;");
                         }
                     }

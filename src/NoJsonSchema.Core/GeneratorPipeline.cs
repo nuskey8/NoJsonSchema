@@ -48,7 +48,7 @@ public sealed class GeneratorPipeline
                     break;
                 case UnionTypeDescriptor union:
                     files.Add(new($"{union.Name}.g.cs", UnionTypeEmitter.Emit(union, graph, options)));
-                    files.Add(new($"Formatters/{union.Name}Formatter.g.cs", FormatterEmitter.EmitUnion(union, graph, options)));
+                    files.Add(new($"Formatters/{union.Name}Formatter.g.cs", UnionFormatterEmitter.Emit(union, graph, options)));
                     break;
                 case EnumTypeDescriptor enm:
                     files.Add(new($"{enm.Name}.g.cs", EnumTypeEmitter.Emit(enm, options)));

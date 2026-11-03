@@ -8,9 +8,9 @@ namespace NoJsonSchema.Core.Emit;
 /// Emits <c>{Type}Formatter.g.cs</c> for a single <see cref="ObjectTypeDescriptor"/> —
 /// the type-specific Deserialize / Serialize implementation.
 /// </summary>
-public static partial class FormatterEmitter
+public static class FormatterEmitter
 {
-    readonly record struct EmitContext(TypeGraph Graph)
+    internal readonly record struct EmitContext(TypeGraph Graph)
     {
         public bool IsUnion(string name) => Graph.Types.TryGetValue(name, out var d) && d is UnionTypeDescriptor;
 
@@ -284,7 +284,7 @@ public static partial class FormatterEmitter
         }
     }
 
-    static void EmitReadValueInto(SourceWriter w, PropertyDescriptor p, EmitContext ctx)
+    internal static void EmitReadValueInto(SourceWriter w, PropertyDescriptor p, EmitContext ctx)
     {
         if (p.IsNullable || !p.IsRequired)
         {
@@ -530,7 +530,7 @@ public static partial class FormatterEmitter
         }
     }
 
-    static void EmitWriteCoreValue(SourceWriter w, PropertyDescriptor p, TypeRef inner, string accessor, bool forceUnwrap, EmitContext ctx)
+    internal static void EmitWriteCoreValue(SourceWriter w, PropertyDescriptor p, TypeRef inner, string accessor, bool forceUnwrap, EmitContext ctx)
     {
         var read = forceUnwrap ? accessor + ".Value" : accessor;
         switch (inner)
@@ -660,7 +660,7 @@ public static partial class FormatterEmitter
         _ => "w.WriteNull()",
     };
 
-    static TypeRef Unwrap(TypeRef t) => t is TypeRef.Nullable nu ? Unwrap(nu.Inner) : t;
+    internal static TypeRef Unwrap(TypeRef t) => t is TypeRef.Nullable nu ? Unwrap(nu.Inner) : t;
 
     // ---------------------------------------------------------------------------------------------
     // Struct path: deserialize into locals then construct via primary ctor; serialize takes 'in T'.
